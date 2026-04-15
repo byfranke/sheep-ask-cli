@@ -203,7 +203,17 @@ echo "================================="
 echo "  Installation Complete!"
 echo "================================="
 echo ""
-
-echo "Launching setup wizard..."
+echo "You can now use: sheep-ask"
 echo ""
-python3 "$WORK_DIR/setup.py" </dev/tty
+echo "GitHub: $GITHUB_REPO"
+
+echo ""
+echo "Starting configuration..."
+echo ""
+
+cd "$WORK_DIR"
+if [ -t 0 ]; then
+    python3 setup.py
+else
+    python3 setup.py </dev/tty
+fi
