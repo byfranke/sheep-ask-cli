@@ -7,7 +7,6 @@ Copyright (c) 2026 byFranke - Security Solutions
 import os
 import sys
 import subprocess
-import shutil
 from pathlib import Path
 from getpass import getpass
 import base64
@@ -287,51 +286,50 @@ By continuing, you agree to our terms and privacy policy.
             console.print(f"Please check for updates manually at: {GITHUB_REPO}")
             return
         try:
-            repo_path = CONFIG_DIR / "repo"
-            if repo_path.exists():
-                console.print("Pulling latest updates...")
-                repo = git.Repo(repo_path)
-                repo.remotes.origin.pull()
-            else:
-                console.print(f"Cloning from {GITHUB_REPO}...")
-                repo_path.parent.mkdir(exist_ok=True)
-                git.Repo.clone_from(GITHUB_REPO, repo_path)
+            install_dir = Path.home() / ".sheep-ask-cli"
 
-            remote_version_file = repo_path / "VERSION"
-            if remote_version_file.exists():
-                remote_version = remote_version_file.read_text().strip()
-                if remote_version != self.current_version:
-                    console.print(f"[yellow]New version available: {remote_version} (current: {self.current_version})[/yellow]")
-                    if Confirm.ask("Do you want to update now?"):
-                        self.perform_update(repo_path)
+            if (install_dir / ".git").exists():
+                console.print("Pulling latest updates...")
+                repo = git.Repo(install_dir)
+                origin = repo.remotes.origin
+                origin.pull()
+                console.print("[green][OK][/green] Updated successfully!")
+            else:
+                console.print(f"[yellow]Repository not found at {install_dir}[/yellow]")
+                console.print("To reinstall, run:")
+                console.print("  curl -fsSL https://byfranke.com/ask-cli-install | bash")
+                return
+
+            version_file = install_dir / "VERSION"
+            if version_file.exists():
+                new_version = version_file.read_text().strip()
+                if new_version != self.current_version:
+                    console.print(f"[green]Updated to version {new_version}[/green]")
                 else:
-                    console.print(f"[green][OK][/green] You have the latest version ({self.current_version})")
+                    console.print(f"[green][OK][/green] Already at latest version ({self.current_version})")
+
         except Exception as e:
             console.print(f"[yellow]Could not check for updates: {e}[/yellow]")
 
-    def perform_update(self, repo_path: Path):
+    def check_system_installation(self):
+        """Check if sheep-ask is accessible from PATH"""
+        console.print("\n[bold cyan]Checking Installation[/bold cyan]")
         try:
-            backup_dir = CONFIG_DIR / "backup"
-            backup_dir.mkdir(exist_ok=True)
-            current_dir = Path(__file__).parent
-
-            for file in ['sheep-ask-cli.py', 'requirements.txt', 'VERSION']:
-                src = repo_path / file
-                if src.exists():
-                    old_file = current_dir / file
-                    if old_file.exists():
-                        shutil.copy2(old_file, backup_dir / f"{file}.bak")
-                    shutil.copy2(src, current_dir / file)
-
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--user", "--upgrade"],
-                capture_output=True, check=True
+            result = subprocess.run(
+                ["which", "sheep-ask"],
+                capture_output=True,
+                text=True
             )
-            console.print("[green][OK][/green] Update completed successfully!")
-            console.print(f"[dim]Backup saved to: {backup_dir}[/dim]")
-        except Exception as e:
-            console.print(f"[red]Update failed: {e}[/red]")
-            console.print("[yellow]Please update manually from GitHub[/yellow]")
+            if result.returncode == 0:
+                console.print(f"[green][OK][/green] sheep-ask is available at: {result.stdout.strip()}")
+                return True
+            else:
+                console.print("[yellow]sheep-ask not found in PATH[/yellow]")
+                console.print("To reinstall, run:")
+                console.print("  curl -fsSL https://byfranke.com/ask-cli-install | bash")
+                return False
+        except Exception:
+            return False
 
     def system_installation(self):
         console.print("\n[bold cyan]System Installation[/bold cyan]")
@@ -357,15 +355,15 @@ By continuing, you agree to our terms and privacy policy.
 [bold]Quick Start Guide:[/bold]
 
 1. Test your installation:
-   [cyan]./sheep-ask-cli.py --version[/cyan]
+   [cyan]sheep-ask --version[/cyan]
 
 2. Ask a question:
-   [cyan]./sheep-ask-cli.py "What is ransomware?"[/cyan]
-   [cyan]./sheep-ask-cli.py -o "What are the TTPs of APT29?"[/cyan]
-   [cyan]./sheep-ask-cli.py -p report.md "Summarize the key findings"[/cyan]
+   [cyan]sheep-ask "What is ransomware?"[/cyan]
+   [cyan]sheep-ask -o "What are the TTPs of APT29?"[/cyan]
+   [cyan]sheep-ask -p report.md "Summarize the key findings"[/cyan]
 
 3. Get help:
-   [cyan]./sheep-ask-cli.py --help[/cyan]
+   [cyan]sheep-ask --help[/cyan]
 
 4. Check for updates:
    [cyan]python3 setup.py --update[/cyan]
@@ -386,7 +384,7 @@ By continuing, you agree to our terms and privacy policy.
         self.configure_token()
         if Confirm.ask("\n[bold]Check for updates from GitHub?[/bold]"):
             self.check_for_updates()
-        self.system_installation()
+        self.check_system_installation()
         self.display_summary()
 
 
