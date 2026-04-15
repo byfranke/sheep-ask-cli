@@ -12,9 +12,11 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+INSTALL_DIR="$HOME/.sheep-ask-cli"
 CONFIG_DIR="$HOME/.sheep-ask-cli"
 BACKUP_DIR="$HOME/.sheep-ask-cli-backup-$(date +%Y%m%d-%H%M%S)"
-SYSTEM_INSTALL="/usr/local/bin/sheep-ask"
+SYSTEM_BIN="/usr/local/bin/sheep-ask"
+LOCAL_BIN="$HOME/.local/bin/sheep-ask"
 CURRENT_DIR="$(dirname "$(readlink -f "$0")")"
 
 echo -e "${CYAN}================================="
@@ -40,9 +42,21 @@ ask_yes_no() {
 
 check_installation() {
     local installed=false
-    [ -f "$CURRENT_DIR/sheep-ask-cli.py" ] && { print_info "Found Sheep Ask CLI in current directory"; installed=true; }
-    [ -d "$CONFIG_DIR" ] && { print_info "Found configuration directory: $CONFIG_DIR"; installed=true; }
-    [ -f "$SYSTEM_INSTALL" ] && { print_info "Found system-wide installation: $SYSTEM_INSTALL"; installed=true; }
+
+    if [ -d "$INSTALL_DIR" ]; then
+        print_info "Found installation directory: $INSTALL_DIR"
+        installed=true
+    fi
+
+    if [ -f "$SYSTEM_BIN" ]; then
+        print_info "Found system-wide installation: $SYSTEM_BIN"
+        installed=true
+    fi
+
+    if [ -f "$LOCAL_BIN" ] || [ -L "$LOCAL_BIN" ]; then
+        print_info "Found local bin installation: $LOCAL_BIN"
+        installed=true
+    fi
 
     if [ "$installed" = false ]; then
         print_warning "Sheep Ask CLI installation not found"
@@ -84,16 +98,35 @@ EOF
     fi
 }
 
-remove_system_install() {
-    if [ -f "$SYSTEM_INSTALL" ]; then
+remove_symlinks() {
+    local removed=false
+
+    if [ -f "$SYSTEM_BIN" ]; then
         echo ""
-        if ask_yes_no "Remove system-wide installation from /usr/local/bin?"; then
-            if sudo rm -f "$SYSTEM_INSTALL"; then
-                print_success "Removed system-wide installation"
+        if ask_yes_no "Remove system-wide symlink from /usr/local/bin?"; then
+            if sudo rm -f "$SYSTEM_BIN"; then
+                print_success "Removed $SYSTEM_BIN"
+                removed=true
             else
-                print_error "Failed to remove system-wide installation (may require sudo)"
+                print_error "Failed to remove $SYSTEM_BIN (may require sudo)"
             fi
         fi
+    fi
+
+    if [ -f "$LOCAL_BIN" ] || [ -L "$LOCAL_BIN" ]; then
+        echo ""
+        if ask_yes_no "Remove symlink from ~/.local/bin?"; then
+            if rm -f "$LOCAL_BIN"; then
+                print_success "Removed $LOCAL_BIN"
+                removed=true
+            else
+                print_error "Failed to remove $LOCAL_BIN"
+            fi
+        fi
+    fi
+
+    if [ "$removed" = false ]; then
+        print_info "No symlinks to remove"
     fi
 }
 
@@ -216,7 +249,7 @@ main() {
 
     backup_config
     clear_session_cache
-    remove_system_install
+    remove_symlinks
     remove_config_dir
     remove_dependencies
     remove_local_files
