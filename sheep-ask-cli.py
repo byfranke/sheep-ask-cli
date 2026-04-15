@@ -11,6 +11,7 @@ focused on Cyber Threat Intelligence and general security questions.
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -26,6 +27,12 @@ from getpass import getpass
 import base64
 
 try:
+    import git
+    GIT_AVAILABLE = True
+except ImportError:
+    GIT_AVAILABLE = False
+
+try:
     from cryptography.fernet import Fernet
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -34,18 +41,18 @@ try:
 except ImportError:
     ENCRYPTION_AVAILABLE = False
 
-# Constants
-VERSION = "1.0.0"
+_VERSION_FILE = Path(__file__).parent / "VERSION"
+VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.exists() else "1.0.0"
 DEFAULT_API_URL = "https://sheep.byfranke.com/api/ai/ask"
 DEFAULT_CONFIG_FILE = "~/.sheep-ask-cli/config.ini"
+INSTALL_DIR = Path.home() / ".sheep-ask-cli"
 DEFAULT_TIMEOUT = 60
 GITHUB_REPO = "https://github.com/byfranke/sheep-ask-cli"
 PRIVACY_POLICY = "https://sheep.byfranke.com/pages/privacy.html"
 SUPPORT_EMAIL = "support@byfranke.com"
 
-# Context file handling (mirrors bash sheep-ask behavior)
-CHUNK_WORDS = 500          # split prompt file in chunks above this word count
-CONTEXT_CHAR_LIMIT = 2000  # final context size sent with the question
+CHUNK_WORDS = 500
+CONTEXT_CHAR_LIMIT = 2000
 
 console = Console()
 
@@ -63,6 +70,7 @@ class SheepAskClient:
                 "  1. Run: python3 setup.py to configure encrypted token\n"
                 "  2. Use --token argument for one-time use\n"
                 "  3. Set SHEEP_API_TOKEN environment variable\n\n"
+                "To reinstall: curl -fsSL https://byfranke.com/ask-cli-install | bash\n"
                 f"Support: {SUPPORT_EMAIL}\n"
                 f"Documentation: {GITHUB_REPO}"
             )
@@ -285,7 +293,7 @@ class SheepAskClient:
                         summaries.append(summary)
                     progress.advance(task)
                     if idx < len(chunks):
-                        time.sleep(1)  # rate limit, mirrors bash
+                        time.sleep(1)
             context = "\n\n".join(summaries).strip()
 
         if len(context) > CONTEXT_CHAR_LIMIT:
@@ -369,8 +377,45 @@ def init_config():
 def check_for_updates():
     console.print("[bold cyan]Checking for updates...[/bold cyan]")
     console.print(f"Current version: {VERSION}")
-    console.print(f"\nFor updates, visit: {GITHUB_REPO}")
-    console.print("To update, run: [cyan]python3 setup.py --update[/cyan]")
+
+    if not GIT_AVAILABLE:
+        console.print("[yellow]Git module not available - check manually[/yellow]")
+        console.print(f"\nFor updates, visit: {GITHUB_REPO}")
+        console.print("To reinstall: [cyan]curl -fsSL https://byfranke.com/ask-cli-install | bash[/cyan]")
+        return
+
+    if not (INSTALL_DIR / ".git").exists():
+        console.print(f"[yellow]Git repository not found at {INSTALL_DIR}[/yellow]")
+        console.print("To reinstall: [cyan]curl -fsSL https://byfranke.com/ask-cli-install | bash[/cyan]")
+        return
+
+    try:
+        console.print("Pulling latest updates...")
+        repo = git.Repo(INSTALL_DIR)
+        repo.remotes.origin.pull()
+        console.print("[green][OK][/green] Repository updated")
+
+        version_file = INSTALL_DIR / "VERSION"
+        if version_file.exists():
+            new_version = version_file.read_text().strip()
+            if new_version != VERSION:
+                console.print(f"[green]Updated to version {new_version} (was {VERSION})[/green]")
+                console.print("[yellow]Upgrading dependencies...[/yellow]")
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-r",
+                     str(INSTALL_DIR / "requirements.txt"), "--user", "--upgrade"],
+                    capture_output=True, text=True
+                )
+                if result.returncode == 0:
+                    console.print("[green][OK][/green] Dependencies upgraded")
+                else:
+                    console.print("[yellow]Could not upgrade dependencies automatically[/yellow]")
+                    console.print(f"Run manually: pip install -r {INSTALL_DIR}/requirements.txt --upgrade")
+            else:
+                console.print(f"[green][OK][/green] Already at latest version ({VERSION})")
+    except Exception as e:
+        console.print(f"[yellow]Could not check for updates: {e}[/yellow]")
+        console.print(f"\nFor updates, visit: {GITHUB_REPO}")
 
 
 def main():
@@ -387,8 +432,11 @@ Examples:
 Setup & Configuration:
   python3 setup.py                 # Run interactive setup wizard
   %(prog)s --init                  # Quick config file creation
-  %(prog)s --update                # Check for updates
+  %(prog)s --update                # Check for updates (uses git pull)
   %(prog)s --logout                # Clear cached token for this terminal
+
+Install / Reinstall:
+  curl -fsSL https://byfranke.com/ask-cli-install | bash
 
 Support:
   Documentation: {GITHUB_REPO}
