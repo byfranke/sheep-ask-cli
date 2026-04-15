@@ -206,4 +206,4 @@ echo ""
 
 echo "Launching setup wizard..."
 echo ""
-python3 "$WORK_DIR/setup.py"
+python3 "$WORK_DIR/setup.py" </dev/tty
