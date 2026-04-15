@@ -9,7 +9,7 @@ A command-line interface for sending AI queries to [sheep.byfranke.com](https://
 
 ---
 
-**About more:** https://sheep.byfranke.com/pages/ask.html
+**About more:** [Sheep API](https://sheep.byfranke.com/index.html#API)
 
 ## Installation
 
