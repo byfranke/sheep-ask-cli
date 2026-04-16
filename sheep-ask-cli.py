@@ -58,7 +58,7 @@ console = Console()
 
 
 class SheepAskClient:
-    """Client for the Sheep AI Ask API."""
+    """Client for the Sheep API."""
 
     def __init__(self, api_token: Optional[str] = None, api_url: Optional[str] = None):
         self.api_token = api_token or self._load_token()
@@ -175,7 +175,7 @@ class SheepAskClient:
         return None
 
     def ask(self, question: str) -> Dict[str, Any]:
-        """Send a question to the Sheep AI API."""
+        """Send a question to the Sheep API."""
         headers = {
             "X-API-Token": self.api_token,
             "Content-Type": "application/json",
@@ -338,11 +338,11 @@ def display_response(result: Dict[str, Any], output_format: str = "pretty") -> O
         try:
             console.print(Panel(
                 Markdown(answer),
-                title="Sheep AI Response",
+                title="Sheep Ask CLI",
                 border_style="green",
             ))
         except Exception:
-            console.print(Panel(answer, title="Sheep AI Response", border_style="green"))
+            console.print(Panel(answer, title="Sheep Ask CLI", border_style="green"))
 
     return answer
 
