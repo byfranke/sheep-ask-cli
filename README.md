@@ -118,24 +118,6 @@ sheep-ask --model sage   "Deep CTI on Volt Typhoon's recent campaigns"
 sheep-ask plan
 ```
 
-Sample output:
-
-```
-╭───────────────── Sheep Profile · Sheep Pro ─────────────────╮
-│ Plan: Sheep Pro                                              │
-│ Status: active                                               │
-│ Period ends: 2026-06-06T05:08:12+00:00                       │
-│                                                              │
-│ Allowed models: auto, scout, hunter                          │
-│                                                              │
-│ Period usage                                                 │
-│ ████░░░░░░░░░░░░░░░░  4,210 / 20,000 tokens (21%)            │
-│ Remaining: 15,790 tokens                                     │
-╰──────────────────────────────────────────────────────────────╯
-```
-
-Add `--format json` to get the raw payload for scripting.
-
 ### Save Response to Markdown
 
 ```bash
