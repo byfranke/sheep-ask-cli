@@ -4,7 +4,7 @@ A command-line interface for sending AI queries to [sheep.byfranke.com](https://
 
 <p align="center">
   <strong>AI queries from your terminal, fast and secure</strong><br>
-  Version 1.0 | byFranke 2026
+  Version 1.1 | byFranke 2026
 </p>
 
 ---
@@ -83,6 +83,58 @@ sheep-ask What are the TTPs of APT29
 # Explain a framework
 sheep-ask "Explain the MITRE ATT&CK framework"
 ```
+
+### Choose a Model
+
+Sheep exposes four model tiers. Pick one with `--model`; the default is
+`auto`, which routes the question to the right tier on the server side.
+
+```bash
+# Default — server picks the right tier
+sheep-ask "What is BGP hijacking?"
+
+# Explicit tier
+sheep-ask --model scout  "Define lateral movement"
+sheep-ask --model hunter "Map T1566 to known APTs"
+sheep-ask --model sage   "Deep CTI on Volt Typhoon's recent campaigns"
+```
+
+| Model    | Best for                                         |
+|----------|--------------------------------------------------|
+| `auto`   | Default. Smart routing — let Sheep choose.       |
+| `scout`  | Fast factual answers, definitions, quick lookups.|
+| `hunter` | Deeper CTI analysis, MITRE mapping, correlations.|
+| `sage`   | Heaviest tier (Enterprise plan).                 |
+
+> Each plan covers a subset of these tiers. Trying to pick a model not
+> covered by your plan returns an error message naming the tiers you
+> can use and a link to upgrade. To see your allowed models, run
+> `sheep-ask plan` (next section).
+
+### Check Your Plan
+
+```bash
+# Show your plan, status, allowed models, and current-period token usage
+sheep-ask plan
+```
+
+Sample output:
+
+```
+╭───────────────── Sheep Profile · Sheep Pro ─────────────────╮
+│ Plan: Sheep Pro                                              │
+│ Status: active                                               │
+│ Period ends: 2026-06-06T05:08:12+00:00                       │
+│                                                              │
+│ Allowed models: auto, scout, hunter                          │
+│                                                              │
+│ Period usage                                                 │
+│ ████░░░░░░░░░░░░░░░░  4,210 / 20,000 tokens (21%)            │
+│ Remaining: 15,790 tokens                                     │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+Add `--format json` to get the raw payload for scripting.
 
 ### Save Response to Markdown
 
@@ -163,6 +215,21 @@ sheep-ask --update
    Error: Request timed out
    ```
    Solution: The query is taking longer than 60s. Try again or simplify the question.
+
+5. **Unknown Model**
+   ```
+   Bad Request — Unknown model: gpt4
+   Valid models: auto, scout, hunter, sage
+   ```
+   Solution: Pass one of the four supported models with `--model`.
+
+6. **Plan Does Not Include This Model**
+   ```
+   Model sage is not included in Sheep Pro.
+   Models in your plan: auto, scout, hunter
+   ```
+   Solution: Pick a model your plan covers (run `sheep-ask plan` to
+   confirm) or upgrade at https://sheep.byfranke.com/pages/store.
 
 ### Contributing
 

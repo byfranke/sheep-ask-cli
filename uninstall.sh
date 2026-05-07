@@ -1,9 +1,4 @@
 #!/bin/bash
-# Sheep Ask CLI Uninstall Script
-# Copyright (c) 2026 byFranke - Security Solutions
-#
-# This script removes Sheep Ask CLI and its associated files from your system
-
 set -e
 
 RED='\033[0;31m'
@@ -71,9 +66,11 @@ backup_config() {
         if ask_yes_no "Do you want to backup your configuration files before uninstalling?"; then
             print_info "Creating backup at: $BACKUP_DIR"
             mkdir -p "$BACKUP_DIR"
+            chmod 700 "$BACKUP_DIR"
 
             if [ -f "$CONFIG_DIR/config.ini" ]; then
                 cp "$CONFIG_DIR/config.ini" "$BACKUP_DIR/" 2>/dev/null || true
+                chmod 600 "$BACKUP_DIR/config.ini" 2>/dev/null || true
                 print_success "Backed up config.ini"
             fi
 
@@ -91,8 +88,8 @@ if [ -f "$BACKUP_DIR/config.ini" ]; then
 fi
 echo "Configuration restored successfully!"
 EOF
-            chmod +x "$BACKUP_DIR/restore.sh"
-            print_success "Backup completed"
+            chmod 700 "$BACKUP_DIR/restore.sh"
+            print_success "Backup completed (mode 0700 — owner only)"
             print_info "To restore configuration later, run: $BACKUP_DIR/restore.sh"
         fi
     fi
@@ -158,17 +155,15 @@ remove_dependencies() {
     print_warning "The following Python packages were installed by Sheep Ask CLI:"
     echo "  - requests"
     echo "  - rich"
-    echo "  - configparser"
     echo "  - cryptography"
     echo "  - keyring"
-    echo "  - getpass4"
     echo "  - GitPython"
     echo ""
     print_warning "These packages might be used by other applications"
 
     if ask_yes_no "Do you want to uninstall these Python packages?"; then
         print_info "Attempting to uninstall Python packages..."
-        for package in requests rich configparser cryptography keyring getpass4 GitPython; do
+        for package in requests rich cryptography keyring GitPython; do
             echo -n "  Removing $package... "
             if pip3 uninstall -y "$package" 2>/dev/null || pip uninstall -y "$package" 2>/dev/null; then
                 echo -e "${GREEN}OK${NC}"
@@ -274,6 +269,10 @@ main() {
     echo ""
     echo "Thank you for using Sheep Ask CLI!"
     echo "For feedback or support: support@byfranke.com"
+    echo ""
+    echo "Want to come back? Reinstall any time:"
+    echo "  curl -fsSL https://byfranke.com/ask-cli-install | bash"
+    echo "Get an API token: https://sheep.byfranke.com/pages/store"
 }
 
 main "$@"

@@ -41,9 +41,12 @@ try:
 except ImportError:
     ENCRYPTION_AVAILABLE = False
 
-_VERSION_FILE = Path(__file__).parent / "VERSION"
-VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.exists() else "1.0.0"
-DEFAULT_API_URL = "https://sheep.byfranke.com/api/ai/ask"
+_VERSION_FILE = Path(__file__).resolve().parent / "VERSION"
+VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.exists() else "1.1.1"
+DEFAULT_API_BASE = "https://sheep.byfranke.com"
+ASK_PATH = "/api/ai/ask"
+PROFILE_PATH = "/api/profile"
+DEFAULT_API_URL = DEFAULT_API_BASE + ASK_PATH
 DEFAULT_CONFIG_FILE = "~/.sheep-ask-cli/config.ini"
 INSTALL_DIR = Path.home() / ".sheep-ask-cli"
 DEFAULT_TIMEOUT = 60
@@ -54,6 +57,29 @@ SUPPORT_EMAIL = "support@byfranke.com"
 CHUNK_WORDS = 500
 CONTEXT_CHAR_LIMIT = 2000
 
+PUBLIC_MODELS = ("auto", "scout", "hunter", "sage")
+DEFAULT_MODEL = "auto"
+
+PBKDF2_DEFAULT_ITERATIONS = 600000
+LEGACY_FIXED_SALT = b'sheep-ask-cli-salt-2026'
+LEGACY_ITERATIONS = 100000
+
+
+def _normalize_api_base(value: Optional[str]) -> str:
+    """Accept either a base URL or a full /api/ai/ask URL and return the base.
+
+    v1.0.x configs stored ``api.url=https://sheep.byfranke.com/api/ai/ask``
+    in the ini file. v1.1+ wants the bare base so we can derive /ask AND
+    /api/profile. Strip the legacy suffix transparently so an upgraded CLI
+    doesn't force the user to re-edit their config.
+    """
+    if not value:
+        return DEFAULT_API_BASE
+    v = value.rstrip("/")
+    if v.endswith(ASK_PATH):
+        v = v[: -len(ASK_PATH)]
+    return v or DEFAULT_API_BASE
+
 console = Console()
 
 
@@ -62,7 +88,10 @@ class SheepAskClient:
 
     def __init__(self, api_token: Optional[str] = None, api_url: Optional[str] = None):
         self.api_token = api_token or self._load_token()
-        self.api_url = api_url or DEFAULT_API_URL
+        raw_url = api_url if api_url else self._load_api_url()
+        self.api_base = _normalize_api_base(raw_url)
+        self.api_url = self.api_base + ASK_PATH
+        self.profile_url = self.api_base + PROFILE_PATH
 
         if not self.api_token:
             raise ValueError(
@@ -110,17 +139,22 @@ class SheepAskClient:
         except Exception:
             pass
 
-    def _decrypt_token(self, encrypted_token: str, password: str) -> Optional[str]:
+    def _decrypt_token(
+        self,
+        encrypted_token: str,
+        password: str,
+        salt: bytes,
+        iterations: int,
+    ) -> Optional[str]:
         if not ENCRYPTION_AVAILABLE:
             console.print("[yellow]Warning: Encryption libraries not available[/yellow]")
             return None
         try:
-            salt = b'sheep-ask-cli-salt-2026'
             kdf = PBKDF2HMAC(
                 algorithm=hashes.SHA256(),
                 length=32,
                 salt=salt,
-                iterations=100000,
+                iterations=iterations,
             )
             key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
             f = Fernet(key)
@@ -129,6 +163,27 @@ class SheepAskClient:
             return decrypted.decode()
         except Exception:
             return None
+
+    def _load_api_url(self) -> Optional[str]:
+        """Load api.url from config (overridable by --api-url at the CLI).
+
+        Returns the raw value as stored — caller normalises into a base.
+        ``SHEEP_API_URL`` env var also honoured for parity with the bot
+        and CI surfaces.
+        """
+        env_url = os.environ.get("SHEEP_API_URL")
+        if env_url:
+            return env_url
+        config_path = Path(DEFAULT_CONFIG_FILE).expanduser()
+        if config_path.exists():
+            cfg = configparser.ConfigParser()
+            try:
+                cfg.read(config_path)
+            except (configparser.Error, OSError):
+                return None
+            if "api" in cfg and "url" in cfg["api"]:
+                return cfg["api"]["url"]
+        return None
 
     def _load_token(self) -> Optional[str]:
         """Load API token from env, keyring, or config file."""
@@ -156,11 +211,28 @@ class SheepAskClient:
                         return cached
 
                     encrypted_token = config["api"]["encrypted_token"]
+                    salt_b64 = config["api"].get("salt")
+                    if salt_b64:
+                        try:
+                            salt = base64.b64decode(salt_b64)
+                        except Exception:
+                            salt = LEGACY_FIXED_SALT
+                    else:
+                        salt = LEGACY_FIXED_SALT
+                    try:
+                        iterations = int(config["api"].get(
+                            "kdf_iterations", LEGACY_ITERATIONS
+                        ))
+                    except (TypeError, ValueError):
+                        iterations = LEGACY_ITERATIONS
+
                     console.print("[yellow]Token is encrypted. Enter your master password:[/yellow]")
 
                     for attempt in range(3):
                         password = getpass("Master Password: ")
-                        token = self._decrypt_token(encrypted_token, password)
+                        token = self._decrypt_token(
+                            encrypted_token, password, salt, iterations
+                        )
                         if token:
                             self._write_session_cache(token)
                             return token
@@ -174,13 +246,22 @@ class SheepAskClient:
 
         return None
 
-    def ask(self, question: str) -> Dict[str, Any]:
-        """Send a question to the Sheep API."""
+    def ask(self, question: str, model: str = DEFAULT_MODEL) -> Dict[str, Any]:
+        """Send a question to the Sheep API.
+
+        ``model`` selects the public Sheep tier (auto/scout/hunter/sage).
+        The API rejects unknown models with HTTP 400 and rejects models
+        not covered by the caller's plan with HTTP 403 ``model_not_in_plan``;
+        both surface with a helpful message instead of a generic
+        "API returned status N".
+        """
         headers = {
-            "X-API-Token": self.api_token,
+            "X-Sheep-Token": self.api_token,
             "Content-Type": "application/json",
         }
-        payload = {"question": question}
+        payload: Dict[str, Any] = {"question": question}
+        if model and model != DEFAULT_MODEL:
+            payload["model"] = model
 
         try:
             with Progress(
@@ -209,6 +290,12 @@ class SheepAskClient:
         if response.status_code == 401:
             console.print("[red]Error: Invalid API token[/red]")
             sys.exit(1)
+        if response.status_code == 400:
+            self._handle_bad_request(response)
+            sys.exit(1)
+        if response.status_code == 403:
+            self._handle_forbidden(response)
+            sys.exit(1)
         if response.status_code == 422:
             console.print("[red]Error: Request too large or invalid format[/red]")
             console.print("[yellow]Try a shorter question or smaller context file[/yellow]")
@@ -226,10 +313,102 @@ class SheepAskClient:
             console.print("[red]Error: Invalid API response[/red]")
             sys.exit(1)
 
+    @staticmethod
+    def _detail(response: requests.Response) -> Dict[str, Any]:
+        """Return the parsed ``detail`` block from a FastAPI error response.
+
+        FastAPI nests structured errors under ``{"detail": {...}}``. Older
+        endpoints sometimes return ``detail`` as a string. This helper
+        coerces both into a dict so callers can do .get(...) safely.
+        """
+        try:
+            body = response.json()
+        except ValueError:
+            return {}
+        detail = body.get("detail") if isinstance(body, dict) else None
+        if isinstance(detail, dict):
+            return detail
+        if isinstance(detail, str):
+            return {"message": detail}
+        return {}
+
+    def _handle_bad_request(self, response: requests.Response) -> None:
+        """Render HTTP 400 bodies. The most common case is unknown_model
+        (the user typoed --model), which carries a typed payload listing
+        the valid public models."""
+        d = self._detail(response)
+        if d.get("error") == "unknown_model":
+            requested = d.get("requested", "?")
+            valid = d.get("valid_models") or list(PUBLIC_MODELS)
+            console.print(Panel(
+                f"[red]Unknown model:[/red] [bold]{requested}[/bold]\n\n"
+                f"Valid models: [cyan]{', '.join(valid)}[/cyan]",
+                title="Bad Request",
+                border_style="red",
+            ))
+        else:
+            msg = d.get("message") or "API rejected the request"
+            console.print(f"[red]Error 400: {msg}[/red]")
+
+    def _handle_forbidden(self, response: requests.Response) -> None:
+        """Render HTTP 403. The plan gate uses ``error=model_not_in_plan``
+        to tell the caller which models their plan covers and surface
+        the upgrade URL."""
+        d = self._detail(response)
+        if d.get("error") == "model_not_in_plan":
+            requested = d.get("requested_model", "?")
+            plan_label = d.get("plan_display_name") or d.get("plan", "your plan")
+            allowed = d.get("allowed_models") or []
+            allowed_str = ", ".join(allowed) if allowed else "auto"
+            console.print(Panel(
+                f"[red]Model [bold]{requested}[/bold] is not included in "
+                f"[bold]{plan_label}[/bold].[/red]\n\n"
+                f"Models in your plan: [cyan]{allowed_str}[/cyan]\n\n"
+                f"To upgrade, visit: "
+                f"[blue]https://sheep.byfranke.com/pages/store[/blue]",
+                title="Plan does not include this model",
+                border_style="red",
+            ))
+        else:
+            msg = d.get("message") or "Forbidden"
+            console.print(f"[red]Error 403: {msg}[/red]")
+
+    def profile(self) -> Dict[str, Any]:
+        """Fetch the authenticated caller's plan + quota from /api/profile."""
+        headers = {"X-Sheep-Token": self.api_token}
+        try:
+            response = requests.get(
+                self.profile_url, headers=headers, timeout=DEFAULT_TIMEOUT
+            )
+        except requests.exceptions.Timeout:
+            console.print("[red]Error: Profile request timed out[/red]")
+            sys.exit(1)
+        except requests.exceptions.ConnectionError:
+            console.print("[red]Error: Failed to connect to API server[/red]")
+            sys.exit(1)
+        except requests.exceptions.RequestException as e:
+            console.print(f"[red]Error: {e}[/red]")
+            sys.exit(1)
+
+        if response.status_code == 401:
+            console.print("[red]Error: Invalid API token[/red]")
+            sys.exit(1)
+        if response.status_code != 200:
+            d = self._detail(response)
+            msg = d.get("message") or f"API returned status {response.status_code}"
+            console.print(f"[red]Error: {msg}[/red]")
+            sys.exit(1)
+
+        try:
+            return response.json()
+        except ValueError:
+            console.print("[red]Error: Invalid profile response[/red]")
+            sys.exit(1)
+
     def _summarize_chunk(self, chunk: str) -> str:
         """Ask the API to summarize a single chunk. Returns '' on failure."""
         question = f"Summarize key points: {chunk[:1500]}"
-        headers = {"X-API-Token": self.api_token, "Content-Type": "application/json"}
+        headers = {"X-Sheep-Token": self.api_token, "Content-Type": "application/json"}
         try:
             resp = requests.post(
                 self.api_url,
@@ -327,6 +506,9 @@ def display_response(result: Dict[str, Any], output_format: str = "pretty") -> O
         return None
 
     answer = result.get("response", "")
+    served_by = result.get("served_by")
+    usage = result.get("usage") or {}
+    tokens_used = result.get("tokens_used") or usage.get("total_tokens")
 
     if output_format == "json":
         console.print_json(json.dumps(result, indent=2))
@@ -334,17 +516,72 @@ def display_response(result: Dict[str, Any], output_format: str = "pretty") -> O
         print(answer)
     elif output_format == "markdown":
         console.print(Markdown(answer))
-    else:  # pretty
+    else:
+        title = "Sheep Ask CLI"
+        if served_by:
+            title = f"Sheep Ask CLI · model: {served_by}"
         try:
             console.print(Panel(
                 Markdown(answer),
-                title="Sheep Ask CLI",
+                title=title,
                 border_style="green",
             ))
         except Exception:
-            console.print(Panel(answer, title="Sheep Ask CLI", border_style="green"))
+            console.print(Panel(answer, title=title, border_style="green"))
+        if tokens_used:
+            console.print(f"[dim]Tokens used: {tokens_used}[/dim]")
 
     return answer
+
+
+def display_profile(profile: Dict[str, Any]) -> None:
+    """Render the /api/profile payload as a human-readable summary."""
+    plan = profile.get("plan") or {}
+    sub = profile.get("subscription") or {}
+    usage = profile.get("usage") or {}
+    addons = profile.get("addons") or []
+
+    plan_name = plan.get("name") or plan.get("id") or "unknown"
+    allowed = plan.get("allowed_models") or []
+    allowed_str = ", ".join(allowed) if allowed else "auto"
+
+    consumed = int(usage.get("current_period_tokens") or 0)
+    budget = int(usage.get("current_period_budget") or 0)
+    remaining = int(usage.get("tokens_remaining") or 0)
+    if budget > 0:
+        pct = min(100, int(consumed * 100 / budget))
+        bar_len = 20
+        filled = int(pct * bar_len / 100)
+        bar = "█" * filled + "░" * (bar_len - filled)
+        usage_line = f"[cyan]{bar}[/cyan]  {consumed:,} / {budget:,} tokens ({pct}%)"
+    else:
+        usage_line = f"{consumed:,} tokens consumed (budget unknown)"
+
+    body_lines = [
+        f"[bold]Plan:[/bold] {plan_name}",
+        f"[bold]Status:[/bold] {sub.get('status', 'unknown')}",
+        f"[bold]Period ends:[/bold] {sub.get('current_period_end', '—')}",
+        "",
+        f"[bold]Allowed models:[/bold] [cyan]{allowed_str}[/cyan]",
+        "",
+        f"[bold]Period usage[/bold]",
+        usage_line,
+        f"[bold]Remaining:[/bold] {remaining:,} tokens",
+    ]
+    if addons:
+        addon_lines = [
+            f"  • {a.get('name', a.get('id', '?'))}: +{a.get('extra_tokens_period', 0):,} tokens"
+            for a in addons
+        ]
+        body_lines.append("")
+        body_lines.append("[bold]Active add-ons:[/bold]")
+        body_lines.extend(addon_lines)
+
+    console.print(Panel(
+        "\n".join(body_lines),
+        title=f"Sheep Profile · {plan_name}",
+        border_style="green",
+    ))
 
 
 def init_config():
@@ -426,8 +663,16 @@ def main():
 Examples:
   %(prog)s "What is ransomware?"
   %(prog)s "What are the TTPs of APT29?" -o
+  %(prog)s --model hunter "Map T1566 to known APTs"
   %(prog)s -p report.md "Summarize the key findings"
   %(prog)s --prompt incident.md "What are the IOCs mentioned?"
+  %(prog)s plan                    # Show plan, quota and allowed models
+
+Models (subject to your plan — see `%(prog)s plan`):
+  auto      Smart routing (default).
+  scout     Fast factual answers.
+  hunter    Deeper CTI analysis.
+  sage      Heaviest tier (Enterprise plan).
 
 Setup & Configuration:
   python3 setup.py                 # Run interactive setup wizard
@@ -454,6 +699,9 @@ Copyright (c) 2026 byFranke - Security Solutions
                         help="Save the AI response to a timestamped markdown file")
     parser.add_argument("--token", help="API authentication token (one-time use)")
     parser.add_argument("--api-url", help=f"API endpoint URL (default: {DEFAULT_API_URL})")
+    parser.add_argument("--model", choices=list(PUBLIC_MODELS), default=DEFAULT_MODEL,
+                        help=f"Sheep model tier (default: {DEFAULT_MODEL}). Plan-gated; "
+                             f"run '%(prog)s plan' to see which models your plan covers.")
     parser.add_argument("--format", choices=["pretty", "json", "markdown", "plain"],
                         default="pretty", help="Output format (default: pretty)")
     parser.add_argument("--init", action="store_true", help="Initialize configuration file")
@@ -483,6 +731,8 @@ AI Query Tool for Cyber Threat Intelligence
 - Use markdown files as context
 - Save responses as timestamped markdown files
 - Encrypted token storage with per-session cache
+- Model selector: --model auto|scout|hunter|sage
+- Subcommand 'plan' to view your plan, quota and allowed models
         """
         console.print(Panel(about_info, title="About Sheep Ask CLI", style="cyan"))
         return
@@ -503,7 +753,7 @@ AI Query Tool for Cyber Threat Intelligence
     if args.setup:
         console.print("[cyan]Launching setup wizard...[/cyan]")
         script_dir = Path(__file__).resolve().parent
-        os.system(f"{sys.executable} {script_dir / 'setup.py'}")
+        subprocess.call([sys.executable, str(script_dir / "setup.py")])
         return
 
     if args.update:
@@ -513,6 +763,27 @@ AI Query Tool for Cyber Threat Intelligence
     if args.init:
         init_config()
         return
+
+    is_plan_subcommand = (
+        args.question
+        and len(args.question) == 1
+        and args.question[0].lower() == "plan"
+    )
+    if is_plan_subcommand:
+        try:
+            client = SheepAskClient(api_token=args.token, api_url=args.api_url)
+            profile = client.profile()
+            if args.format == "json":
+                console.print_json(json.dumps(profile, indent=2))
+            else:
+                display_profile(profile)
+            return
+        except ValueError as e:
+            console.print(f"[red]Error: {str(e)}[/red]")
+            sys.exit(1)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Cancelled by user[/yellow]")
+            sys.exit(0)
 
     question = " ".join(args.question).strip()
     if not question:
@@ -526,7 +797,7 @@ AI Query Tool for Cyber Threat Intelligence
             if context:
                 question = f"Context: {context}\n\nQuestion: {question}"
 
-        result = client.ask(question)
+        result = client.ask(question, model=args.model)
         answer = display_response(result, args.format)
 
         if answer and args.output_file:

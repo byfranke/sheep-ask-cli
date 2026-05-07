@@ -1,9 +1,4 @@
 #!/bin/bash
-# Sheep Ask CLI Installation Script
-# Copyright (c) 2026 byFranke - Security Solutions
-#
-# Usage: curl -fsSL https://byfranke.com/ask-cli-install | bash
-
 set -e
 
 GITHUB_REPO="https://github.com/byfranke/sheep-ask-cli"
@@ -11,25 +6,32 @@ GITHUB_RAW="https://raw.githubusercontent.com/byfranke/sheep-ask-cli/main"
 INSTALL_DIR="$HOME/.sheep-ask-cli"
 MIN_PYTHON_VERSION="3.7"
 
+DOWNLOADER=""
+if command -v curl >/dev/null 2>&1; then
+    DOWNLOADER="curl"
+elif command -v wget >/dev/null 2>&1; then
+    DOWNLOADER="wget"
+else
+    echo "Either curl or wget is required but neither is installed" >&2
+    exit 1
+fi
+
 download_file() {
     local url="$1"
     local output="$2"
 
-    if command -v curl >/dev/null 2>&1; then
+    if [ "$DOWNLOADER" = "curl" ]; then
         if [ -n "$output" ]; then
             curl -fsSL -o "$output" "$url"
         else
             curl -fsSL "$url"
         fi
-    elif command -v wget >/dev/null 2>&1; then
+    else
         if [ -n "$output" ]; then
             wget -q -O "$output" "$url"
         else
             wget -q -O - "$url"
         fi
-    else
-        echo "Either curl or wget is required" >&2
-        return 1
     fi
 }
 
@@ -72,12 +74,15 @@ fi
 
 echo "[OK] pip found"
 
-if [ ! -f "requirements.txt" ] || [ ! -f "sheep-ask-cli.py" ]; then
+if [ -f "requirements.txt" ] && [ -f "sheep-ask-cli.py" ]; then
+    WORK_DIR="$(pwd)"
+else
     echo ""
     echo "Downloading Sheep Ask CLI..."
 
     mkdir -p "$INSTALL_DIR"
     cd "$INSTALL_DIR"
+    WORK_DIR="$INSTALL_DIR"
 
     if command -v git >/dev/null 2>&1; then
         if [ -d "$INSTALL_DIR/.git" ]; then
@@ -93,14 +98,15 @@ if [ ! -f "requirements.txt" ] || [ ! -f "sheep-ask-cli.py" ]; then
         download_file "$GITHUB_RAW/sheep-ask-cli.py" "sheep-ask-cli.py"
         download_file "$GITHUB_RAW/setup.py" "setup.py"
         download_file "$GITHUB_RAW/requirements.txt" "requirements.txt"
+        download_file "$GITHUB_RAW/uninstall.sh" "uninstall.sh" 2>/dev/null || true
         download_file "$GITHUB_RAW/VERSION" "VERSION" 2>/dev/null || true
         download_file "$GITHUB_RAW/LICENSE" "LICENSE" 2>/dev/null || true
         download_file "$GITHUB_RAW/README.md" "README.md" 2>/dev/null || true
+        [ -f "uninstall.sh" ] && chmod +x uninstall.sh
         echo "[OK] Files downloaded"
     fi
 fi
 
-WORK_DIR="${INSTALL_DIR:-$(pwd)}"
 cd "$WORK_DIR"
 
 echo ""
@@ -119,9 +125,22 @@ install_deps() {
         echo "System uses externally managed Python (PEP 668)."
         echo "Trying: pip3 install --break-system-packages..."
 
-        if pip3 install -r requirements.txt --break-system-packages 2>&1; then
+        local out2
+        out2=$(pip3 install -r requirements.txt --break-system-packages 2>&1)
+        if [ $? -eq 0 ]; then
             return 0
         fi
+
+        if echo "$out2" | grep -q "RECORD file not found.*installed by debian\|Cannot uninstall.*distutils"; then
+            echo ""
+            echo "Detected debian-managed Python package conflict."
+            echo "Retrying with --ignore-installed (keeps the debian package)..."
+            if pip3 install -r requirements.txt --break-system-packages --ignore-installed 2>&1; then
+                return 0
+            fi
+        fi
+
+        echo "$out2" | tail -5
     fi
 
     return 1
@@ -206,6 +225,7 @@ echo ""
 echo "You can now use: sheep-ask"
 echo ""
 echo "GitHub: $GITHUB_REPO"
+echo "Get an API token: https://sheep.byfranke.com/pages/store"
 
 echo ""
 echo "Starting configuration..."

@@ -7,10 +7,16 @@ Copyright (c) 2026 byFranke - Security Solutions
 import os
 import sys
 import subprocess
+import secrets
 from pathlib import Path
 from getpass import getpass
 import base64
 import configparser
+
+
+PBKDF2_ITERATIONS = 600000
+PBKDF2_SALT_BYTES = 16
+LEGACY_FIXED_SALT = b'sheep-ask-cli-salt-2026'
 
 
 def check_dependencies():
@@ -34,16 +40,30 @@ def check_dependencies():
             )
             if result.returncode != 0:
                 if "externally-managed-environment" in result.stderr:
-                    print("\nYour system uses externally managed Python.")
-                    print("Options:")
-                    print("1. Use --break-system-packages (may affect system):")
-                    print(f"   {sys.executable} -m pip install -r requirements.txt --break-system-packages")
-                    print("\n2. Use a virtual environment (recommended):")
+                    print("\nYour system uses externally managed Python (PEP 668).")
+                    answer = input(
+                        "Try installing with --break-system-packages? [y/N]: "
+                    ).strip().lower()
+                    if answer in ("y", "yes"):
+                        result2 = subprocess.run(
+                            [sys.executable, "-m", "pip", "install"] + missing
+                            + ["--break-system-packages"],
+                            capture_output=True, text=True
+                        )
+                        if result2.returncode == 0:
+                            print("Dependencies installed successfully!")
+                            print("\nPlease restart the setup:")
+                            print(f"  {sys.executable} setup.py")
+                            sys.exit(0)
+                        print(f"Installation failed: {result2.stderr}")
+
+                    print("\nAlternative installation methods:")
+                    print("\n1. Use a virtual environment (recommended):")
                     print("   python3 -m venv venv")
                     print("   source venv/bin/activate")
                     print("   pip install -r requirements.txt")
                     print("   python setup.py")
-                    print("\n3. Use system packages:")
+                    print("\n2. Use system packages:")
                     print("   sudo apt install python3-rich python3-cryptography python3-keyring python3-git")
                     sys.exit(1)
                 else:
@@ -96,6 +116,7 @@ VERSION_FILE = Path(__file__).parent / "VERSION"
 PRIVACY_POLICY = "https://sheep.byfranke.com/pages/privacy.html"
 TERMS_OF_SERVICE = "https://sheep.byfranke.com/pages/terms.html"
 SUPPORT_EMAIL = "support@byfranke.com"
+STORE_URL = "https://sheep.byfranke.com/pages/store"
 
 
 class SecureTokenManager:
@@ -105,25 +126,25 @@ class SecureTokenManager:
         self.config_dir = CONFIG_DIR
         self.config_dir.mkdir(exist_ok=True)
 
-    def _derive_key(self, password: str) -> bytes:
+    def _derive_key(self, password: str, salt: bytes) -> bytes:
         if not ENCRYPTION_AVAILABLE:
             raise ImportError("Cryptography library not available")
-        salt = b'sheep-ask-cli-salt-2026'
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
-            iterations=100000,
+            iterations=PBKDF2_ITERATIONS,
         )
         return base64.urlsafe_b64encode(kdf.derive(password.encode()))
 
-    def encrypt_token(self, token: str, password: str) -> str:
-        f = Fernet(self._derive_key(password))
+    def encrypt_token(self, token: str, password: str, salt: bytes) -> str:
+        f = Fernet(self._derive_key(password, salt))
         encrypted = f.encrypt(token.encode())
         return base64.b64encode(encrypted).decode()
 
     def save_encrypted_token(self, token: str, password: str):
-        encrypted = self.encrypt_token(token, password)
+        salt = secrets.token_bytes(PBKDF2_SALT_BYTES)
+        encrypted = self.encrypt_token(token, password, salt)
 
         config = configparser.ConfigParser()
         if CONFIG_FILE.exists():
@@ -131,6 +152,8 @@ class SecureTokenManager:
         if 'api' not in config:
             config['api'] = {}
         config['api']['encrypted_token'] = encrypted
+        config['api']['salt'] = base64.b64encode(salt).decode()
+        config['api']['kdf_iterations'] = str(PBKDF2_ITERATIONS)
         config['api']['encryption_enabled'] = 'true'
 
         with open(CONFIG_FILE, 'w') as f:
@@ -159,11 +182,14 @@ class SheepAskSetup:
     def get_current_version(self) -> str:
         if VERSION_FILE.exists():
             return VERSION_FILE.read_text().strip()
-        return "1.0.0"
+        return "1.1.0"
 
     def display_welcome(self):
         console.clear()
-        header = "SHEEP ASK CLI SETUP WIZARD v1.0\nAI Query Tool for Cyber Threat Intelligence"
+        header = (
+            f"SHEEP ASK CLI SETUP WIZARD v{self.current_version}\n"
+            "AI Query Tool for Cyber Threat Intelligence"
+        )
         console.print(Panel(header, style="bold cyan"))
 
         privacy_notice = f"""
@@ -254,10 +280,22 @@ By continuing, you agree to our terms and privacy policy.
             console.print("Please install: pip3 install cryptography --break-system-packages")
             return False
 
-        console.print("[yellow]Enter your API token (hidden for security):[/yellow]")
+        cta = (
+            "[bold]Don't have an API token yet?[/bold]\n\n"
+            f"Get one at [cyan]{STORE_URL}[/cyan]\n"
+            "  • Sheep Pro / Enterprise — paid plans, token by email.\n"
+            "  • Black Sheep gift card — redeem on Discord with /token.\n\n"
+            "[dim]Once you have a token (starts with 'shp_'), paste it below.[/dim]"
+        )
+        console.print(Panel(cta, title="Need an API token?", style="yellow"))
+
+        console.print("\n[yellow]Enter your API token (hidden for security):[/yellow]")
         token = getpass("Token: ").strip()
         if not token:
-            console.print("[red]Error: Token cannot be empty[/red]")
+            console.print("[red]Error: Token cannot be empty.[/red]")
+            console.print(
+                f"[yellow]Get your token at:[/yellow] [cyan]{STORE_URL}[/cyan]"
+            )
             return False
 
         console.print("\n[bold]Set a master password for token encryption[/bold]")
@@ -357,21 +395,28 @@ By continuing, you agree to our terms and privacy policy.
 1. Test your installation:
    [cyan]sheep-ask --version[/cyan]
 
-2. Ask a question:
+2. Check your plan, allowed models and quota:
+   [cyan]sheep-ask plan[/cyan]
+
+3. Ask a question:
    [cyan]sheep-ask "What is ransomware?"[/cyan]
    [cyan]sheep-ask -o "What are the TTPs of APT29?"[/cyan]
    [cyan]sheep-ask -p report.md "Summarize the key findings"[/cyan]
 
-3. Get help:
+4. Pick a model tier (auto / scout / hunter / sage):
+   [cyan]sheep-ask --model hunter "Map T1566 to known APTs"[/cyan]
+
+5. Get help:
    [cyan]sheep-ask --help[/cyan]
 
-4. Check for updates:
+6. Check for updates:
    [cyan]python3 setup.py --update[/cyan]
 
 [bold]Support:[/bold]
 - Documentation: {GITHUB_REPO}
 - Email: {SUPPORT_EMAIL}
 - Privacy: {PRIVACY_POLICY}
+- Get a token / upgrade: {STORE_URL}
 """
         console.print(guide)
 
