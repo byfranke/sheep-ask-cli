@@ -87,7 +87,11 @@ else
     if command -v git >/dev/null 2>&1; then
         if [ -d "$INSTALL_DIR/.git" ]; then
             echo "Updating existing installation..."
-            git pull --quiet
+            git fetch --quiet origin
+            DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')
+            DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+            git reset --hard --quiet "origin/$DEFAULT_BRANCH"
+            git clean -fdq
         else
             rm -rf "$INSTALL_DIR"/* 2>/dev/null || true
             git clone --quiet "$GITHUB_REPO.git" "$INSTALL_DIR"
